@@ -1,5 +1,5 @@
 [workspace]
-members = ["connectrpc", "connectrpc-codegen", "connectrpc-build", "protoc-gen-connect-rust", "conformance", "examples/eliza", "examples/multiservice", "tests/streaming", "benches/rpc", "benches/rpc-tonic"]
+members = ["connectrpc", "connectrpc-codegen", "connectrpc-build", "conformance", "examples/eliza", "examples/multiservice", "tests/streaming", "benches/rpc", "benches/rpc-tonic"]
 resolver = "2"
 
 [workspace.package]

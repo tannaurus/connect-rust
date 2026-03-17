@@ -12,7 +12,7 @@ COPY . .
 # Build the plugin binary (statically linked via musl)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --target x86_64-unknown-linux-musl -p protoc-gen-connect-rust \
+    cargo build --release --target x86_64-unknown-linux-musl -p connectrpc-codegen --bin protoc-gen-connect-rust \
  && cp /src/target/x86_64-unknown-linux-musl/release/protoc-gen-connect-rust /usr/local/bin/
 
 FROM scratch

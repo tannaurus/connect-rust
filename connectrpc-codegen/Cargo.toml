@@ -8,8 +8,13 @@ description = "Library for generating ConnectRPC Rust service bindings from prot
 keywords = ["connectrpc", "grpc", "protobuf", "codegen"]
 categories = ["development-tools::build-utils"]
 
+[[bin]]
+name = "protoc-gen-connect-rust"
+path = "src/bin/protoc-gen-connect-rust.rs"
+
 [dependencies]
 # Protobuf code generation
+buffa = { workspace = true }
 buffa-codegen = { workspace = true }
 
 # Code generation
