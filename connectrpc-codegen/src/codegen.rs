@@ -20,6 +20,8 @@ use buffa_codegen::generated::descriptor::MethodDescriptorProto;
 use buffa_codegen::generated::descriptor::ServiceDescriptorProto;
 use buffa_codegen::generated::descriptor::SourceCodeInfo;
 use buffa_codegen::generated::descriptor::method_options::IdempotencyLevel;
+use buffa_codegen::idents::make_field_ident;
+use buffa_codegen::idents::rust_path_to_tokens;
 
 pub use buffa_codegen::GeneratedFile;
 pub use buffa_codegen::generated::descriptor;
@@ -372,16 +374,14 @@ impl<'a> TypeResolver<'a> {
     /// Resolve a proto FQN to Rust type-path tokens.
     fn rust_type(&self, proto_fqn: &str, current_package: &str) -> Result<TokenStream> {
         let path = self.resolve_path(proto_fqn, current_package)?;
-        Ok(buffa_codegen::idents::rust_path_to_tokens(&path))
+        Ok(rust_path_to_tokens(&path))
     }
 
     /// Like [`rust_type`] but appends `View` to the last path segment, e.g.
     /// `super::foo::Bar` -> `super::foo::BarView`.
     fn rust_view_type(&self, proto_fqn: &str, current_package: &str) -> Result<TokenStream> {
         let path = self.resolve_path(proto_fqn, current_package)?;
-        Ok(buffa_codegen::idents::rust_path_to_tokens(&format!(
-            "{path}View"
-        )))
+        Ok(rust_path_to_tokens(&format!("{path}View")))
     }
 }
 
@@ -489,7 +489,7 @@ fn generate_service(
         .iter()
         .map(|m| {
             let method_name = m.name.as_deref().unwrap_or("");
-            let method_snake = format_ident!("{}", method_name.to_snake_case());
+            let method_snake = make_field_ident(&method_name.to_snake_case());
 
             let client_streaming = m.client_streaming.unwrap_or(false);
             let server_streaming = m.server_streaming.unwrap_or(false);
@@ -586,7 +586,7 @@ fn generate_service(
         .method
         .first()
         .and_then(|m| m.name.as_deref())
-        .map(|n| n.to_snake_case())
+        .map(|n| make_field_ident(&n.to_snake_case()).to_string())
         .unwrap_or_else(|| "method".to_string());
 
     // Build client doc comment with interpolated example method
@@ -774,7 +774,7 @@ fn generate_service_server(
 
     for m in &service.method {
         let method_name = m.name.as_deref().unwrap_or("");
-        let method_snake = format_ident!("{}", method_name.to_snake_case());
+        let method_snake = make_field_ident(&method_name.to_snake_case());
         let input_view = resolver.rust_view_type(m.input_type.as_deref().unwrap_or(""), package)?;
         let cs = m.client_streaming.unwrap_or(false);
         let ss = m.server_streaming.unwrap_or(false);
@@ -968,7 +968,7 @@ fn generate_trait_method(
     package: &str,
 ) -> Result<TokenStream> {
     let method_name = method.name.as_deref().unwrap_or("");
-    let method_snake = format_ident!("{}", method_name.to_snake_case());
+    let method_snake = make_field_ident(&method_name.to_snake_case());
     let input_view_type =
         resolver.rust_view_type(method.input_type.as_deref().unwrap_or(""), package)?;
     let output_type = resolver.rust_type(method.output_type.as_deref().unwrap_or(""), package)?;
@@ -1042,7 +1042,7 @@ fn generate_client_method(
     package: &str,
 ) -> Result<TokenStream> {
     let method_name = method.name.as_deref().unwrap_or("");
-    let method_snake = format_ident!("{}", method_name.to_snake_case());
+    let method_snake = make_field_ident(&method_name.to_snake_case());
     let method_with_opts = format_ident!("{}_with_options", method_name.to_snake_case());
     let input_type = resolver.rust_type(method.input_type.as_deref().unwrap_or(""), package)?;
     let output_view_type =
@@ -1265,8 +1265,20 @@ mod tests {
         output_type: &str,
         local_messages: &[&str],
     ) -> FileDescriptorProto {
+        minimal_file_with_method(package, "Ping", input_type, output_type, local_messages)
+    }
+
+    /// Like [`minimal_file`] but with a custom RPC method name, for testing
+    /// keyword collisions and other name-derived behaviour.
+    fn minimal_file_with_method(
+        package: Option<&str>,
+        method_name: &str,
+        input_type: &str,
+        output_type: &str,
+        local_messages: &[&str],
+    ) -> FileDescriptorProto {
         let method = MethodDescriptorProto {
-            name: Some("Ping".into()),
+            name: Some(method_name.into()),
             input_type: Some(input_type.into()),
             output_type: Some(output_type.into()),
             ..Default::default()
@@ -1505,5 +1517,53 @@ mod tests {
             code.contains("crate :: proto :: google :: r#type :: LatLng"),
             "keyword segment not escaped: {code}"
         );
+    }
+
+    #[test]
+    fn keyword_method_escaped() {
+        // `rpc Move(...)` -> snake_case `move` is a Rust keyword; emit `r#move`
+        // via idents::make_field_ident. Regression for issue #23.
+        let file = minimal_file_with_method(
+            Some("example.v1"),
+            "Move",
+            ".example.v1.Empty",
+            ".example.v1.Empty",
+            &["Empty"],
+        );
+        let code = gen_service(std::slice::from_ref(&file), 0, &[], false).unwrap();
+        assert!(
+            code.contains("fn r#move"),
+            "keyword method not escaped: {code}"
+        );
+        assert!(
+            code.contains("move_with_options"),
+            "suffixed variant should not need escaping: {code}"
+        );
+        // Doc example should also use the escaped form so the snippet is valid.
+        assert!(code.contains("client.r#move(request)"));
+        syn::parse_str::<syn::File>(&code).expect("generated code parses");
+    }
+
+    #[test]
+    fn path_keyword_method_suffixed() {
+        // `self`/`super`/`Self`/`crate` cannot be raw identifiers; they are
+        // suffixed with `_` instead (matching prost convention).
+        let file = minimal_file_with_method(
+            Some("example.v1"),
+            "Self",
+            ".example.v1.Empty",
+            ".example.v1.Empty",
+            &["Empty"],
+        );
+        let code = gen_service(std::slice::from_ref(&file), 0, &[], false).unwrap();
+        assert!(
+            code.contains("fn self_"),
+            "path-keyword method not suffixed: {code}"
+        );
+        // The `_with_options` variant uses the unsuffixed snake name; the
+        // suffix already de-keywords it, so we get `self_with_options`
+        // (not `self__with_options`).
+        assert!(code.contains("self_with_options"));
+        syn::parse_str::<syn::File>(&code).expect("generated code parses");
     }
 }
